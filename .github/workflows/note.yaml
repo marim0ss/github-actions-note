@@ -68,7 +68,7 @@ jobs:
 
       - name: Install Claude Code SDK
         run: |
-          npm init -y
+          # npm init -y <- due to Error at 1st step
           npm i @anthropic-ai/claude-code
 
       - name: Research with Claude Code SDK
