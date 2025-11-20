@@ -67,7 +67,7 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
   await page.goto('https://note.com/login');
 
   console.log('手動でログインしてください。ログイン完了を自動検知します...');
-  
+
   // ログイン完了を自動検知（note.comのトップページに遷移するまで待機）
   try {
     await page.waitForURL(/note\.com\/?$/, { timeout: 300000 }); // 5分待機
