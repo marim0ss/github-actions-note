@@ -49,10 +49,10 @@ env:
 
 jobs:
   research:
-    name: Research (Anthropic SDK + Web Tools)
+    name: Research (Gemini 1.5 Flash - 無料・Web検索可)
     runs-on: ubuntu-latest
     env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       THEME: ${{ github.event.inputs.theme }}
       TARGET: ${{ github.event.inputs.target }}
     outputs:
@@ -65,99 +65,62 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
-      - name: Install Anthropic SDK
+      - name: Research with Gemini (無料・Web検索ツール付き)
         run: |
-          npm init -y
-          npm i @anthropic-ai/sdk
-
-      - name: Research with Latest Anthropic SDK
-        run: |
-          cat > research.mjs <<'EOF'
-          import Anthropic from '@anthropic-ai/sdk';
+          cat > gemini_research.mjs <<'EOF'
           import fs from 'fs';
 
-          const anthropic = new Anthropic({
-            apiKey: process.env.ANTHROPIC_API_KEY,
-          });
-
-          const theme = process.env.THEME || 'テストテーマ';
-          const target = process.env.TARGET || 'テストターゲット';
           const today = new Date().toISOString().slice(0,10);
-          const artifactsDir = '.note-artifacts';
-          fs.mkdirSync(artifactsDir, { recursive: true });
+          const prompt = `あなたは最高のリサーチャーです。
+          テーマ「${process.env.THEME}」について、想定読者「${process.env.TARGET}」向けに、
+          最新かつ信頼性の高い情報を徹底的に調べて、2500語以上の詳細なリサーチレポートをMarkdownで書いてください。
+          必ず一次情報・公的資料・論文・公式発表を優先し、出典URLは本文中にMarkdownリンクで埋め込んでください。
+          今日の日付: ${today}
+          出力はMarkdown本文だけ（JSONやコードブロックは絶対使わない）`;
 
-          const response = await anthropic.messages.create({
-            model: "claude-sonnet-4-5-20250929",  // ←これが正しい！（Claude 4.5 Sonnet、2025年9月版）
-            max_tokens: 8192,
-            temperature: 0.7,
-            system: `あなたは最新情報の収集と要約に特化した超一流のリサーチャーです。
-            事実ベース・一次情報優先・本文内にMarkdownリンクで出典を必ず埋め込むこと。
-            十分な分量（目安: 2,500語以上）で詳細に書いてください。
-            Web検索ツールを積極的に使い、一次情報（公的機関・論文・公式発表）を最優先にしてください。
-            現在日付: ${today}`,
-            messages: [{
-              role: "user",
-              content: `以下のテーマとターゲットに対する最終版のリサーチレポートを作成してください。
-              【重要】途中経過や確認質問は一切せず、最終レポートのみ返してください。
-              不明点は「前提と仮定」セクションで簡潔に明記してから続行してください。
-              ---
-              テーマ: ${theme}
-              ターゲット: ${target}
-              現在日付: ${today}`
-            }],
-            tools: [
-              {
-                type: "web_search_20250305",  // 2025年最新のWebSearchツールタイプ
-                name: "web_search"
-              }
-            ],
-            tool_choice: { type: "auto" }  // 自動でツール使用
+          const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + process.env.GEMINI_API_KEY, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              tools: [{ googleSearchRetrieval: {} }],  // ← これで自動Web検索！
+              generationConfig: { temperature: 0.3, maxOutputTokens: 8192 }
+            })
           });
 
-          let finalText = '';
-          for (const block of response.content) {
-            if (block.type === 'text') {
-              finalText += block.text + '\n\n';
-            }
-          }
+          const data = await res.json();
+          let text = data.candidates?.[0]?.content?.parts?.[0]?.text || 'リサーチ失敗';
 
-          // ツール使用のトレースも保存（デバッグ用）
-          const trace = {
-            usage: response.usage,
-            content: response.content
-          };
+          // コードフェンス除去
+          text = text.replace(/```markdown|```/g, '').trim();
 
-          fs.writeFileSync(`${artifactsDir}/research.md`, finalText.trim());
-          fs.writeFileSync(`${artifactsDir}/research_trace.json`, JSON.stringify(trace, null, 2));
-          console.log("リサーチ完了！生成文字数約:", finalText.length);
+          const dir = '.note-artifacts';
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(`${dir}/research.md`, text);
+          console.log('Gemini Research完了！文字数:', text.length);
           EOF
 
-          node research.mjs
+          node gemini_research.mjs
 
       - name: Collect research
         id: collect
         run: |
-          b64=$(base64 -w 0 .note-artifacts/research.md 2>/dev/null || base64 .note-artifacts/research.md)
-          echo "research_b64<<EOF" >> $GITHUB_OUTPUT
-          echo "$b64" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          b64=$(base64 -w 0 .note-artifacts/research.md)
+          echo "research_b64=$b64" >> $GITHUB_OUTPUT
 
-      - name: Upload research artifacts
+      - name: Upload research artifact
         uses: actions/upload-artifact@v4
         with:
-          name: research-artifacts
-          path: |
-            .note-artifacts/research.md
-            .note-artifacts/research_trace.json
+          name: research-artifact
+          path: .note-artifacts/research.md
 
   write:
     name: Write (Gemini 1.5 Flash - 無料無制限)
     needs: research
     runs-on: ubuntu-latest
     env:
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}  # ← これを先にSecretsに入れてね！
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       THEME: ${{ github.event.inputs.theme }}
       TARGET: ${{ github.event.inputs.target }}
       MESSAGE: ${{ github.event.inputs.message }}
