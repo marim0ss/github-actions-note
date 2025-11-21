@@ -223,13 +223,13 @@ jobs:
       - name: Collect draft
         id: collect
         run: |
-          title=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.note-artifacts/draft.json','utf8')).title || 'No Title')"
+          title=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.note-artifacts/draft.json','utf8')).title || 'No Title')")
           b64=$(base64 -w 0 .note-artifacts/draft.json 2>/dev/null || base64 .note-artifacts/draft.json)
           echo "title=$title" >> $GITHUB_OUTPUT
           echo "draft_json_b64=$b64" >> $GITHUB_OUTPUT
 
       - name: Upload draft artifact
-        uses: actions/upload Boats/upload-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
           name: draft-artifact
           path: .note-artifacts/draft.json
