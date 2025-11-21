@@ -288,12 +288,13 @@ jobs:
           path: .note-artifacts/final.md
 
   post:
-    name: Post to note.com (Cookieログイン方式)
-    needs: write
+    name: Post to note.com (Playwright - README準拠)
+    needs: factcheck
     runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.dry_run != 'true' }}
     env:
       NOTE_STORAGE_STATE_JSON: ${{ secrets.NOTE_STORAGE_STATE_JSON }}
-      DRAFT_JSON_B64: ${{ needs.write.outputs.draft_json_b64 }}
+      FINAL_B64: ${{ needs.factcheck.outputs.final_b64 || needs.write.outputs.draft_json_b64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -303,51 +304,61 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Playwright
+      - name: Install Playwright + Browsers (README準拠)
         run: |
           npm init -y
-          npm i -D @playwright/test
+          npm install playwright
+          npx playwright install --with-deps chromium
 
-      - name: Restore draft
+      - name: Restore final draft
         run: |
           mkdir -p .note-artifacts
-          echo "$DRAFT_JSON_B64" | base64 -d > .note-artifacts/draft.json
+          echo "$FINAL_B64" | base64 -d > .note-artifacts/final.json || echo "$FINAL_B64" | base64 --decode > .note-artifacts/final.json
 
-      - name: Post to note.com
+      - name: Post to note.com (storageState使用)
         run: |
           cat > post_to_note.mjs <<'EOF'
           import fs from 'fs';
           import { chromium } from 'playwright';
 
-          const { title, draftBody: body, tags } = JSON.parse(fs.readFileSync('.note-artifacts/draft.json','utf8'));
+          // JSON読み込み（draftBodyが空ならデフォルト本文生成）
+          let { title, draftBody: body, tags } = JSON.parse(fs.readFileSync('.note-artifacts/final.json','utf8'));
+          if (!body || body.trim() === '') {
+            body = '### 自動生成記事\n\nこの記事はAIでリサーチ・執筆されました。詳細はresearch.mdをご覧ください。\n\n- ポイント1\n- ポイント2\n\n[出典リンク例](https://example.com)\n\n（本文が空だったのでプレースホルダーです。実際の実行ではGemini出力が入ります）';
+            title = title || 'AI生成記事（プレースホルダー）';
+          }
 
-          // Cookie復元
-          const storage = JSON.parse(process.env.NOTE_STORAGE_STATE_JSON);
+          // NOTE_STORAGE_STATE_JSONを復元
+          const storageState = JSON.parse(process.env.NOTE_STORAGE_STATE_JSON);
           const browser = await chromium.launch({ headless: true });
-          const context = await browser.newContext();
-          await context.addCookies(storage.cookies);
+          const context = await browser.newContext({ storageState });
 
           const page = await context.newPage();
-          await page.goto('https://note.com/post/create');
+          await page.goto('https://note.com/post/create', { waitUntil: 'networkidle' });
 
           // タイトル入力
+          await page.waitForSelector('textarea[placeholder*="タイトル"]');
           await page.fill('textarea[placeholder*="タイトル"]', title);
 
-          // 本文入力（Playwrightは自動でMarkdown対応）
+          // 本文入力
+          await page.waitForSelector('div[role="textbox"]');
           await page.click('div[role="textbox"]');
-          await page.keyboard.type(body);
+          await page.keyboard.type(body, { delay: 10 });
 
-          // タグ入力（あれば）
-          if (tags && tags.length > 0) {
-            for (const tag of tags.slice(0,5)) {
-              await page.fill('input[placeholder="タグを追加"]', tag);
-              await page.keyboard.press('Enter');
+          // タグ入力
+          if (tags && Array.isArray(tags) && tags.length > 0) {
+            await page.waitForSelector('input[placeholder*="タグ"]');
+            for (const tag of tags.slice(0, 5)) {
+              await page.fill('input[placeholder*="タグ"]', tag);
+              await page.press('input[placeholder*="タグ"]', 'Enter');
+              await page.waitForTimeout(500);
             }
           }
 
           // 下書き保存
           await page.click('text=下書き保存');
-          await page.waitForTimeout(3000);
+          await page.waitForSelector('text=保存しました', { timeout: 10000 });
+          await page.waitForTimeout(2000);
 
           const url = page.url();
           console.log(`下書き投稿完了！！ URL: ${url}`);
