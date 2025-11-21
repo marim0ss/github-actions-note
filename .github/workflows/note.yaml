@@ -314,7 +314,7 @@ jobs:
 
           node factcheck.mjs
       - name: Upload final
-        if: always() 
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: final-article
@@ -365,11 +365,18 @@ jobs:
           import fs from 'fs';
           import { chromium } from 'playwright';
 
-          const raw = fs.readFileSync('.note-artifacts/final.json', 'utf8');
-          const { title = '無題', draftBody: body = '', tags = [] } = JSON.parse(raw);
+          // final.json がなかったら即死
+          if (!fs.existsSync('.note-artifacts/final.json')) {
+            console.error('final.json がありません！前のジョブを確認してください');
+            process.exit(1);
+          }
 
-          const finalTitle = title.trim() || 'AI生成記事（自動投稿）';
-          const finalBody = (body && body.trim()) ? body.trim() : '本文が空でした';
+          const { title = '無題', draftBody: body = '', tags = [] } = JSON.parse(
+            fs.readFileSync('.note-artifacts/final.json', 'utf8')
+          );
+
+          const finalTitle = (title || 'AI生成記事').trim();
+          const finalBody = body && body.trim() ? body.trim() : '（本文が空でした）';
 
           const storageState = JSON.parse(process.env.NOTE_STORAGE_STATE_JSON);
 
@@ -379,27 +386,31 @@ jobs:
 
           await page.goto('https://note.com/post/create', { waitUntil: 'networkidle', timeout: 60000 });
 
+          // タイトル
           await page.fill('textarea[placeholder*="タイトル"]', finalTitle);
 
+          // 本文
           await page.click('div[role="textbox"]');
-          await page.keyboard.type(finalBody, { delay: 10 });
+          await page.keyboard.type(finalBody, { delay: 8 });
 
+          // タグ（最大5個）
           if (Array.isArray(tags) && tags.length > 0) {
             const tagInput = 'input[placeholder*="タグ"]';
-            await page.waitForSelector(tagInput, { timeout: 10000 });
+            await page.fill(tagInput, '');
             for (const tag of tags.slice(0, 5)) {
-              await page.fill(tagInput, tag);
-              await page.press(tagInput, 'Enter');
-              sxawait page.waitForTimeout(300);
+              await page.fill(tagInput, tag.trim());
+              await page.keyboard.press('Enter');
+              await page.waitForTimeout(300);
             }
           }
 
+          // 下書き保存
           await page.click('text=下書き保存');
           try {
             await page.waitForSelector('text=保存しました', { timeout: 15000 });
-            console.log('下書き保存成功！！');
+            console.log('下書き保存成功！');
           } catch (e) {
-            console.log('保存ボタン押したけど確認出なかった…でも多分保存されてる');
+            console.log('保存確認が出なかったけど、多分保存されてる');
           }
 
           console.log('投稿完了！！ URL:', page.url());
