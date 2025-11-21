@@ -69,7 +69,7 @@ jobs:
       - name: Install Claude Code SDK
         run: |
           npm init -y
-          npm i @anthropic-ai/claude-code
+          npm i @anthropic-ai/claude-code --legacy-peer-deps   # ←ここを追加！
 
       - name: Research with Claude Code SDK
         run: |
