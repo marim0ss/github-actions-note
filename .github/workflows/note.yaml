@@ -75,7 +75,6 @@ jobs:
         run: |
           cat > research.mjs <<'EOF'
           import { query } from '@anthropic-ai/sdk';
-          import { TavilySearch } from 'tavily';
           import fs from 'fs';
           const theme = process.env.THEME || '';
           const target = process.env.TARGET || '';
