@@ -67,7 +67,6 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      # ←ここから置き換え開始（これだけで動く！）
       - name: Install Anthropic SDK
         run: |
           npm init -y
@@ -90,13 +89,13 @@ jobs:
           fs.mkdirSync(artifactsDir, { recursive: true });
 
           const response = await anthropic.messages.create({
-            model: "claude-3-5-sonnet-20241022",
+            model: "claude-3-5-sonnet-20250929",  // 最新Sonnet 4.5モデル（2025年9月版）
             max_tokens: 8192,
             temperature: 0.7,
             system: `あなたは最新情報の収集と要約に特化した超一流のリサーチャーです。
             事実ベース・一次情報優先・本文内にMarkdownリンクで出典を必ず埋め込むこと。
             十分な分量（目安: 2,500語以上）で詳細に書いてください。
-            Web検索とページ閲覧ツールを積極的に使い、一次情報（公的機関・論文・公式発表）を最優先にしてください。
+            Web検索ツールを積極的に使い、一次情報（公的機関・論文・公式発表）を最優先にしてください。
             現在日付: ${today}`,
             messages: [{
               role: "user",
@@ -109,10 +108,12 @@ jobs:
               現在日付: ${today}`
             }],
             tools: [
-              { type: "computer_20241022", name: "web_search" },
-              { type: "computer_20241022", name: "web_fetch" }
+              {
+                type: "web_search_20250305",  // ←これが2025年最新のWebSearchツールタイプ
+                name: "web_search"
+              }
             ],
-            tool_choice: { type: "auto" }
+            tool_choice: { type: "auto" }  // 自動でツール使用
           });
 
           let finalText = '';
@@ -134,7 +135,6 @@ jobs:
           EOF
 
           node research.mjs
-      # ←ここまで置き換え
 
       - name: Collect research
         id: collect
@@ -455,7 +455,7 @@ jobs:
           import os from 'os';
           import path from 'path';
 
-          function nowStr(){ const d=new Date(); const z=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}_${z(d.getHours())}-${z(d.getMinutes())}-${z(d.getSeconds())}`; }
+          function nowStr(){ const d=new Date(); const z=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}}_${z(d.getHours())}-${z(d.getMinutes())}-${z(d.getSeconds())}`; }
 
           const STATE_PATH=process.env.STATE_PATH;
           const START_URL=process.env.START_URL||'https://editor.note.com/new';
@@ -715,4 +715,3 @@ jobs:
         with:
           name: note-screenshot
           path: ${{ steps.publish.outputs.screenshot }}
-
