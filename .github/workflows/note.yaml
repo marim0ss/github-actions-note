@@ -285,7 +285,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: final-article
-          path: .note-artifacts/final.md
+          path: .note-artifacts/final.json
 
   post:
     name: Post to note.com (Playwright - README準拠)
