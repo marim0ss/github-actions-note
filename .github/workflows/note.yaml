@@ -175,11 +175,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install AI SDK
-        run: |
-          npm init -y
-          npm i ai @ai-sdk/anthropic
-
       - name: Restore research
         env:
           RESEARCH_B64: ${{ needs.research.outputs.research_b64 }}
@@ -187,67 +182,89 @@ jobs:
           mkdir -p .note-artifacts
           echo "$RESEARCH_B64" | base64 -d > .note-artifacts/research.md || echo "$RESEARCH_B64" | base64 --decode > .note-artifacts/research.md
 
-      - name: Summarize research first → then write (Rate-limit回避)
+      - name: Ultra-light write (絶対死なない最終版)
         run: |
-          cat > summarize_and_write.mjs <<'EOF'
-          import { generateText } from 'ai';
-          import { anthropic } from '@ai-sdk/anthropic';
+          cat > ultra_write.mjs <<'EOF'
           import fs from 'fs';
 
-          const fullResearch = fs.readFileSync('.note-artifacts/research.md','utf8');
-          const theme = process.env.THEME || '';
-          const target = process.env.TARGET || '';
-          const message = process.env.MESSAGE || '';
-          const cta = process.env.CTA || '';
-          const inputTags = (process.env.INPUT_TAGS||'').split(',').map(s=>s.trim()).filter(Boolean);
+          // research.md の最初の 8000 文字だけ使う（これで確実に30,000制限内）
+          const researchHead = fs.readFileSync('.note-artifacts/research.md','utf8')
+            .substring(0, 8000);
 
-          const model = anthropic('claude-sonnet-4-5-20250929');
+          const prompt = `以下の情報だけを使って、note.com向け長文記事を1発で書いてください。
+          必ずこのJSON形式で返答：
+          {"title":"タイトル","draftBody":"6000-9000文字の本文","tags":["タグ1","タグ2"]}
 
-          // Step 1: リサーチを3,000文字以内に要約
-          const { text: summary } = await generateText({
-            model,
-            system: '以下のリサーチレポートを、重要な事実・数字・出典URLを残しつつ、最大3,000文字以内に要約してください。',
-            prompt: fullResearch,
-            temperature: 0,
-            maxTokens: 3000
+          【テーマ】${process.env.THEME}
+          【ペルソナ】${process.env.TARGET}
+          【伝えたいこと】${process.env.MESSAGE}
+          【読後のアクション】${process.env.CTA}
+          【リサーチ抜粋（冒頭8000文字）】
+          ${researchHead}
+
+          小見出しと箇条書きを多用して読みやすく。`;
+
+          const res = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'x-api-key': process.env.ANTHROPIC_API_KEY,
+              'anthropic-version': '2023-06-01',
+              'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: 'claude-3-5-sonnet-20241022',
+              max_tokens: 8192,
+              temperature: 0.7,
+              system: 'あなたは優秀なライターです。指示されたJSON形式でだけ返答してください。',
+              messages: [{ role: 'user', content: prompt }]
+            })
           });
 
-          // Step 2: 要約だけ使って記事生成
-          const { text } = await generateText({
-            model,
-            system: `note.com向け長文記事を書いてください。以下のJSON形式で必ず返答。
-            {"title":"文字列","draftBody":"6000〜9000文字の本文","tags":["タグ1","タグ2"]}
-            本文は小見出しと箇条書きを多用し、読みやすく。`,
-            prompt: `{テーマ}: ${theme}
-            {ペルソナ}: ${target}
-            {核メッセージ}: ${message}
-            {CTA}: ${cta}
-            {リサーチ要約（3,000文字以内）}:
-            ${summary}`,
-            temperature: 0.7,
-            maxTokens: 15000
-          });
+          if (!res.ok) {
+            console.error('API Error:', await res.text());
+            process.exit(1);
+          }
 
-          // JSON抽出＆フォールバック
+          const data = await res.json();
+          const text = data.content?.[0]?.text || '';
+
           const jsonMatch = text.match(/\{[\s\S]*\}/);
-          let result = { title: '自動生成タイトル', draftBody: text, tags: [] };
+          let result = { title: '最終手段タイトル', draftBody: text, tags: [] };
           if (jsonMatch) {
-            try { result = JSON.parse(jsonMatch[0]); } catch {}
+            try { result = JSON.parse(jsonMatch[0]); } catch (e) { console.log('JSON parse失敗', e); }
           }
 
-          // タイトルが取れなかったときの保険
-          if (!result.title || result.title.includes('自動生成')) {
-            const firstLine = (result.draftBody || '').split('\n')[0] || '';
-            result.title = firstLine.replace(/^#*\s*/, '').slice(0, 80) || 'note記事';
+          // タイトルが空なら強制補完
+          if (!result.title || result.title.trim() === '') {
+            result.title = (result.draftBody || '').split('\n')[0]?.replace(/^#*\s*/, '').slice(0,80) || 'note記事';
           }
 
-          // タグマージ
-          if (inputTags.length > 0) {
-            result.tags = Array.from(new Set([...(Array.isArray(result.tags) ? result.tags : []), ...inputTags]));
+          // タグ追加
+          const inputTags = (process.env.INPUT_TAGS||'').split(',').map(s=>s.trim()).filter(Boolean);
+          if (inputTags.length) {
+            result.tags = Array.from(new Set([...(Array.isArray(result.tags)?result.tags:[]), ...inputTags]));
           }
 
           fs.writeFileSync('.note-artifacts/draft.json', JSON.stringify(result, null, 2));
-          console.log('Write完了！タイトル:', result.title);
+          console.log('Ultra-light Write 成功！タイトル:', result.title);
           EOF
 
-          node summarize_and_write.mjs
+          node ultra_write.mjs
+
+      - name: Collect draft
+        id: collect
+        run: |
+          title=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.note-artifacts/draft.json','utf8')).title)")
+          b64=$(base64 -w 0 .note-artifacts/draft.json 2>/dev/null || base64 .note-artifacts/draft.json)
+          echo "title<<EOF" >> $GITHUB_OUTPUT
+          echo "$title" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "draft_json_b64<<EOF" >> $GITHUB_OUTPUT
+          echo "$b64" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Upload draft artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-artifact
+          path: .note-artifacts/draft.json
