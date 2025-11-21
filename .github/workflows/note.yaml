@@ -69,13 +69,13 @@ jobs:
       - name: Install Claude Code SDK
         run: |
           npm init -y
-          npm i @anthropic-ai/sdk tavily --legacy-peer-deps   # tavilyも一緒に
+          npm i @anthropic-ai/sdk tavily --legacy-peer-deps
 
       - name: Research with Claude Code SDK
         run: |
           cat > research.mjs <<'EOF'
           import { query } from '@anthropic-ai/sdk';
-          import { TavilySearch } from 'tavily';   # 必要なら
+          import { TavilySearch } from 'tavily';
           import fs from 'fs';
           const theme = process.env.THEME || '';
           const target = process.env.TARGET || '';
