@@ -384,8 +384,8 @@ jobs:
           await page.waitForLoadState('networkidle');
           await page.waitForTimeout(5000);
 
-          // タイトル入力（新しいセレクタ）
-          await page.locator('textarea[data-testid="title-input"], textarea[placeholder*="タイトル"], input[type="text"][placeholder*="タイトル"]').first().fill(finalTitle);
+          const titleInput = page.locator('main textarea').first();
+          await titleInput.fill(finalTitle);
 
           // 本文入力
           const editor = page.locator('div[role="textbox"]').first();
