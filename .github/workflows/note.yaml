@@ -49,10 +49,10 @@ env:
 
 jobs:
   research:
-    name: Research (Anthropic SDK + Web Tools)
+    name: Research (Gemini 1.5 Flash - 無料・Web検索可)
     runs-on: ubuntu-latest
     env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       THEME: ${{ github.event.inputs.theme }}
       TARGET: ${{ github.event.inputs.target }}
     outputs:
@@ -65,99 +65,62 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
-      - name: Install Anthropic SDK
+      - name: Research with Gemini (無料・Web検索ツール付き)
         run: |
-          npm init -y
-          npm i @anthropic-ai/sdk
-
-      - name: Research with Latest Anthropic SDK
-        run: |
-          cat > research.mjs <<'EOF'
-          import Anthropic from '@anthropic-ai/sdk';
+          cat > gemini_research.mjs <<'EOF'
           import fs from 'fs';
 
-          const anthropic = new Anthropic({
-            apiKey: process.env.ANTHROPIC_API_KEY,
-          });
-
-          const theme = process.env.THEME || 'テストテーマ';
-          const target = process.env.TARGET || 'テストターゲット';
           const today = new Date().toISOString().slice(0,10);
-          const artifactsDir = '.note-artifacts';
-          fs.mkdirSync(artifactsDir, { recursive: true });
+          const prompt = `あなたは最高のリサーチャーです。
+          テーマ「${process.env.THEME}」について、想定読者「${process.env.TARGET}」向けに、
+          最新かつ信頼性の高い情報を徹底的に調べて、2500語以上の詳細なリサーチレポートをMarkdownで書いてください。
+          必ず一次情報・公的資料・論文・公式発表を優先し、出典URLは本文中にMarkdownリンクで埋め込んでください。
+          今日の日付: ${today}
+          出力はMarkdown本文だけ（JSONやコードブロックは絶対使わない）`;
 
-          const response = await anthropic.messages.create({
-            model: "claude-sonnet-4-5-20250929",  // ←これが正しい！（Claude 4.5 Sonnet、2025年9月版）
-            max_tokens: 8192,
-            temperature: 0.7,
-            system: `あなたは最新情報の収集と要約に特化した超一流のリサーチャーです。
-            事実ベース・一次情報優先・本文内にMarkdownリンクで出典を必ず埋め込むこと。
-            十分な分量（目安: 2,500語以上）で詳細に書いてください。
-            Web検索ツールを積極的に使い、一次情報（公的機関・論文・公式発表）を最優先にしてください。
-            現在日付: ${today}`,
-            messages: [{
-              role: "user",
-              content: `以下のテーマとターゲットに対する最終版のリサーチレポートを作成してください。
-              【重要】途中経過や確認質問は一切せず、最終レポートのみ返してください。
-              不明点は「前提と仮定」セクションで簡潔に明記してから続行してください。
-              ---
-              テーマ: ${theme}
-              ターゲット: ${target}
-              現在日付: ${today}`
-            }],
-            tools: [
-              {
-                type: "web_search_20250305",  // 2025年最新のWebSearchツールタイプ
-                name: "web_search"
-              }
-            ],
-            tool_choice: { type: "auto" }  // 自動でツール使用
+          const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + process.env.GEMINI_API_KEY, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              tools: [{ googleSearchRetrieval: {} }],  // ← これで自動Web検索！
+              generationConfig: { temperature: 0.3, maxOutputTokens: 8192 }
+            })
           });
 
-          let finalText = '';
-          for (const block of response.content) {
-            if (block.type === 'text') {
-              finalText += block.text + '\n\n';
-            }
-          }
+          const data = await res.json();
+          let text = data.candidates?.[0]?.content?.parts?.[0]?.text || 'リサーチ失敗';
 
-          // ツール使用のトレースも保存（デバッグ用）
-          const trace = {
-            usage: response.usage,
-            content: response.content
-          };
+          // コードフェンス除去
+          text = text.replace(/```markdown|```/g, '').trim();
 
-          fs.writeFileSync(`${artifactsDir}/research.md`, finalText.trim());
-          fs.writeFileSync(`${artifactsDir}/research_trace.json`, JSON.stringify(trace, null, 2));
-          console.log("リサーチ完了！生成文字数約:", finalText.length);
+          const dir = '.note-artifacts';
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(`${dir}/research.md`, text);
+          console.log('Gemini Research完了！文字数:', text.length);
           EOF
 
-          node research.mjs
+          node gemini_research.mjs
 
       - name: Collect research
         id: collect
         run: |
-          b64=$(base64 -w 0 .note-artifacts/research.md 2>/dev/null || base64 .note-artifacts/research.md)
-          echo "research_b64<<EOF" >> $GITHUB_OUTPUT
-          echo "$b64" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          b64=$(base64 -w 0 .note-artifacts/research.md)
+          echo "research_b64=$b64" >> $GITHUB_OUTPUT
 
-      - name: Upload research artifacts
+      - name: Upload research artifact
         uses: actions/upload-artifact@v4
         with:
-          name: research-artifacts
-          path: |
-            .note-artifacts/research.md
-            .note-artifacts/research_trace.json
+          name: research-artifact
+          path: .note-artifacts/research.md
 
   write:
-    name: Write (Claude Sonnet 4.0)
+    name: Write (Gemini 2.5 Flash - 2025最新無料モデル)
     needs: research
     runs-on: ubuntu-latest
     env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       THEME: ${{ github.event.inputs.theme }}
       TARGET: ${{ github.event.inputs.target }}
       MESSAGE: ${{ github.event.inputs.message }}
@@ -182,89 +145,273 @@ jobs:
           mkdir -p .note-artifacts
           echo "$RESEARCH_B64" | base64 -d > .note-artifacts/research.md || echo "$RESEARCH_B64" | base64 --decode > .note-artifacts/research.md
 
-      - name: Ultra-light write (絶対死なない最終版)
+      - name: Write with Gemini 2.5 Flash (無料・無制限)
         run: |
-          cat > ultra_write.mjs <<'EOF'
+          cat > gemini_write.mjs <<'EOF'
           import fs from 'fs';
 
-          // research.md の最初の 8000 文字だけ使う（これで確実に30,000制限内）
-          const researchHead = fs.readFileSync('.note-artifacts/research.md','utf8')
-            .substring(0, 8000);
+          // researchは冒頭10,000文字だけ使う（Gemini 2.5はコンテキスト1Mトークンあるけど安全に）
+          const researchExcerpt = fs.readFileSync('.note-artifacts/research.md','utf8')
+            .substring(0, 10000)
+            .replace(/```/g, '\\`\\`\\`'); // バッククォートエスケープ
 
-          const prompt = `以下の情報だけを使って、note.com向け長文記事を1発で書いてください。
-          必ずこのJSON形式で返答：
-          {"title":"タイトル","draftBody":"6000-9000文字の本文","tags":["タグ1","タグ2"]}
+          const prompt = `あなたは超一流のnote.comライターです。
+          以下の情報を元に、6000〜9000文字の長文記事を書いてください。
+          必ずこのJSON形式だけで返答（余計な説明は一切なし）：
+          {"title":"魅力的なタイトル","draftBody":"本文（Markdown）","tags":["タグ1","タグ2","タグ3"]}
 
           【テーマ】${process.env.THEME}
-          【ペルソナ】${process.env.TARGET}
-          【伝えたいこと】${process.env.MESSAGE}
-          【読後のアクション】${process.env.CTA}
-          【リサーチ抜粋（冒頭8000文字）】
-          ${researchHead}
+          【想定読者】${process.env.TARGET}
+          【伝えたい核メッセージ】${process.env.MESSAGE}
+          【読後のアクション（CTA）】${process.env.CTA}
+          【リサーチ内容（冒頭抜粋）】
+          ${researchExcerpt}
 
-          小見出しと箇条書きを多用して読みやすく。`;
+          以下のルールで書いて：
+          - 小見出しを多用
+          - 箇条書きと番号付きリストを活用
+          - 読者が「なるほど！」と思う構成
+          - 日本語で自然に`;
 
-          const res = await fetch('https://api.anthropic.com/v1/messages', {
+          const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + process.env.GEMINI_API_KEY, {
             method: 'POST',
-            headers: {
-              'x-api-key': process.env.ANTHROPIC_API_KEY,
-              'anthropic-version': '2023-06-01',
-              'content-type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'claude-3-5-sonnet-20241022',
-              max_tokens: 8192,
-              temperature: 0.7,
-              system: 'あなたは優秀なライターです。指示されたJSON形式でだけ返答してください。',
-              messages: [{ role: 'user', content: prompt }]
+              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.8,
+                maxOutputTokens: 8192
+              }
             })
           });
 
-          if (!res.ok) {
-            console.error('API Error:', await res.text());
+          if (!response.ok) {
+            console.error('Gemini API Error:', await response.text());
             process.exit(1);
           }
 
-          const data = await res.json();
-          const text = data.content?.[0]?.text || '';
+          const data = await response.json();
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
+          // JSON抽出
           const jsonMatch = text.match(/\{[\s\S]*\}/);
-          let result = { title: '最終手段タイトル', draftBody: text, tags: [] };
+          let result = { title: 'Gemini 2.5生成記事', draftBody: text, tags: [] };
           if (jsonMatch) {
-            try { result = JSON.parse(jsonMatch[0]); } catch (e) { console.log('JSON parse失敗', e); }
+            try { result = JSON.parse(jsonMatch[0]); } catch (e) {
+              console.log('JSONパース失敗、テキスト全体を本文に');
+            }
+          }
+
+          // 手動タグ追加
+          const inputTags = (process.env.INPUT_TAGS || '').split(',').map(t => t.trim()).filter(Boolean);
+          if (inputTags.length > 0) {
+            result.tags = Array.from(new Set([...(Array.isArray(result.tags) ? result.tags : []), ...inputTags]));
           }
 
           // タイトルが空なら強制補完
           if (!result.title || result.title.trim() === '') {
-            result.title = (result.draftBody || '').split('\n')[0]?.replace(/^#*\s*/, '').slice(0,80) || 'note記事';
-          }
-
-          // タグ追加
-          const inputTags = (process.env.INPUT_TAGS||'').split(',').map(s=>s.trim()).filter(Boolean);
-          if (inputTags.length) {
-            result.tags = Array.from(new Set([...(Array.isArray(result.tags)?result.tags:[]), ...inputTags]));
+            result.title = (result.draftBody || '').split('\n')[0]?.replace(/^#*\s*/, '').slice(0, 80) || '自動生成記事';
           }
 
           fs.writeFileSync('.note-artifacts/draft.json', JSON.stringify(result, null, 2));
-          console.log('Ultra-light Write 成功！タイトル:', result.title);
+          console.log('Gemini 2.5 Write 完了！タイトル:', result.title);
+          console.log('生成文字数約:', result.draftBody.length);
           EOF
 
-          node ultra_write.mjs
+          node gemini_write.mjs
 
       - name: Collect draft
         id: collect
         run: |
-          title=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.note-artifacts/draft.json','utf8')).title)")
+          title=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.note-artifacts/draft.json','utf8')).title || 'No Title')")
           b64=$(base64 -w 0 .note-artifacts/draft.json 2>/dev/null || base64 .note-artifacts/draft.json)
-          echo "title<<EOF" >> $GITHUB_OUTPUT
-          echo "$title" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "draft_json_b64<<EOF" >> $GITHUB_OUTPUT
-          echo "$b64" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "title=$title" >> $GITHUB_OUTPUT
+          echo "draft_json_b64=$b64" >> $GITHUB_OUTPUT
 
       - name: Upload draft artifact
         uses: actions/upload-artifact@v4
         with:
           name: draft-artifact
           path: .note-artifacts/draft.json
+
+  factcheck:
+    name: Fact Check (Gemini 2.5 Flash)
+    needs: write
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      DRAFT_JSON_B64: ${{ needs.write.outputs.draft_json_b64 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Restore draft
+        run: |
+          mkdir -p .note-artifacts
+          echo "$DRAFT_JSON_B64" | base64 -d > .note-artifacts/draft.json
+
+      - name: Fact check
+        run: |
+          cat > factcheck.mjs <<'EOF'
+          import fs from 'fs';
+          
+          // draft.json を読み込む
+          const draftPath = '.note-artifacts/draft.json';
+          if (!fs.existsSync(draftPath)) {
+            console.error('draft.json が見つかりません！writeジョブが失敗しています');
+            process.exit(1);
+          }
+          
+          const draft = JSON.parse(fs.readFileSync(draftPath, 'utf8'));
+          const { title = '無題', draftBody: body = '', tags = [] } = draft;
+
+          if (!body || body.trim() === '') {
+            console.log('本文が空です。プレースホルダーでfinal.jsonを出力');
+          }
+
+          const prompt = `以下の記事を徹底的にファクトチェックしてください。誤り・誇張・古い情報があれば指摘し、修正した完全なMarkdown本文を返してください。問題なければ「問題なし」とだけ返答してください。\n\n${body.substring(0, 35000)}`;
+
+          try {
+            const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + process.env.GEMINI_API_KEY, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                contents: [{role: "user", parts: [{text: prompt}]}],
+                generationConfig: {temperature: 0}
+              })
+            });
+
+            if (!res.ok) throw new Error('Gemini APIエラー: ' + await res.text());
+
+            const data = await res.json();
+            const corrected = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || body;
+
+            const finalBody = corrected.includes('問題なし') ? body : corrected;
+
+            // ここで確実に final.json を出力！
+            const finalOutput = {
+              title,
+              draftBody: finalBody,
+              tags
+            };
+
+            fs.mkdirSync('.note-artifacts', { recursive: true });
+            fs.writeFileSync('.note-artifacts/final.json', JSON.stringify(finalOutput, null, 2));
+            console.log('FactCheck完了！final.json を出力しました');
+            console.log('タイトル:', title);
+            console.log('本文文字数:', finalBody.length);
+          } catch (e) {
+            console.error('FactCheckでエラー発生 → draft.jsonをそのままfinal.jsonにコピー');
+            console.error(e.message);
+            fs.copyFileSync(draftPath, '.note-artifacts/final.json');
+          }
+          EOF
+
+          node factcheck.mjs
+      - name: Upload final
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-article
+          path: .note-artifacts/final.json
+
+  post:
+    name: Post to note.com (Playwright - README準拠)
+    needs: factcheck
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.dry_run != 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright + Browsers
+        run: |
+          npm init -y
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      
+      - name: Download final.json artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: final-article
+          path: .note-artifacts/
+
+      
+      - name: Verify final.json exists
+        run: |
+          if [ ! -f .note-artifacts/final.json ]; then
+            echo "final.json が見つかりません！前のジョブを確認してください"
+            ls -la .note-artifacts/ || true
+            exit 1
+          fi
+          echo "final.json 正常に取得できました！"
+
+      - name: Post to note.com
+        env:
+          NOTE_STORAGE_STATE_JSON: ${{ secrets.NOTE_STORAGE_STATE_JSON }}
+        run: |
+          cat > post_to_note.mjs <<'EOF'
+          import fs from 'fs';
+          import { chromium } from 'playwright';
+
+          const { title = '無題', draftBody: body = '', tags = [] } = JSON.parse(
+            fs.readFileSync('.note-artifacts/final.json', 'utf8')
+          );
+
+          const finalTitle = (title || 'AI生成記事').trim();
+          const finalBody = body?.trim() || '（本文が空でした）';
+
+          const browser = await chromium.launch({ headless: true });
+          const context = await browser.newContext({
+            storageState: JSON.parse(process.env.NOTE_STORAGE_STATE_JSON)
+          });
+          const page = await context.newPage();
+
+          await page.goto('https://note.com/post/create', { timeout: 90000, waitUntil: 'networkidle' });
+
+          // ← ここからが最新対応（2025年11月現在）
+          await page.waitForLoadState('networkidle');
+          await page.waitForTimeout(5000);
+
+          const titleInput = page.locator('main textarea').first();
+          await titleInput.fill(finalTitle);
+
+          // 本文入力
+          const editor = page.locator('div[role="textbox"]').first();
+          await editor.click();
+          await editor.press('ControlOrMeta+A'); // 既存テキスト全選択削除
+          await page.keyboard.type(finalBody, { delay: 10 });
+
+          // タグ（あれば）
+          if (tags.length > 0) {
+            try {
+              const tagInput = page.locator('input[placeholder*="タグ"], input[data-testid="tag-input"]').first();
+              await tagInput.click();
+              for (const tag of tags.slice(0, 5)) {
+                await tagInput.fill(tag.trim());
+                await page.keyboard.press('Enter');
+                await page.waitForTimeout(300);
+              }
+            } catch (e) { console.log('タグ入力失敗（スキップ）'); }
+          }
+
+          // 下書き保存
+          await page.click('text=下書き保存, button:has-text("下書き保存")');
+          await page.waitForTimeout(3000);
+
+          console.log('下書き投稿完了！！ URL: ' + page.url());
+          await browser.close();
+          EOF
+
+          node post_to_note.mjs
