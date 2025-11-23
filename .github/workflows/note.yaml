@@ -387,7 +387,7 @@ jobs:
           await page.waitForLoadState('networkidle');
           await page.waitForTimeout(5000);
 
-          const titleInput = page.getByRole('textbox', { name: '記事タイトル' });
+          const titleInput = page.locator('textarea[placeholder="記事タイトル"]');
           await titleInput.fill(finalTitle);
 
           // 本文入力
